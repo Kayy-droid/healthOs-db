@@ -38,15 +38,20 @@ The schema is designed for a multi-tenant organizational health management platf
 - **Separate diagnosis from services rendered.** Diagnosis codes describe conditions; services represent actions performed and connect to billing.
 - **Keep clinically important structured data separate.** For example, allergies are in their own table, not buried in a summary field.
 
-## 2.4 Ward & bed management
+## 2.4 Consent and contactability
+- **Keep consent history append-only.** Each consent change creates a new `consent_records` row rather than mutating old rows.
+- **Expose current consent truth directly.** Operational systems such as CRM should read the latest consent state from a current-state projection or equivalent direct lookup, not reconstruct it by scanning history rows.
+- **Do not let outreach systems own consent truth.** CRM and similar services consume current consent state but do not author canonical consent records.
+
+## 2.5 Ward & bed management
 - Bed occupancy is **time-based** and modeled in a dedicated `bed_assignments` table. Beds do not store patient references directly.
 
-## 2.5 Inventory
+## 2.6 Inventory
 - **Fixed operational core** — stock-in, issue-out, transfer, adjustment, reorder checks, optional batch tracking, optional expiry tracking.
 - **Configurable business vocabulary** — a pharmacy, laundry store, lab reagent store, or central warehouse are all modeled as `inventory_units` with different `inventory_type` values.
 - **Hybrid model** — structured core tables with room for optional custom field extensions later.
 
-## 2.6 Billing & finance
+## 2.7 Billing & finance
 - **Separate charges from payments.** An invoice represents what is owed; a payment represents money actually received.
 - **Support partial payments.** A single invoice can have many payments via `payment_allocations`.
 - **Tie invoice items back to operational sources** (consultation services, lab orders, imaging orders, prescriptions) via `reference_type` + `reference_id`.
@@ -220,7 +225,7 @@ Tracks active and historical login sessions for users.
 
 ---
 
-# 5. Workforce & Scheduling
+# 5. Workforce, Practitioners & Scheduling
 
 ## 5.1 `staff`
 
@@ -242,7 +247,52 @@ Employment/workforce profile table linked to a user account.
 
 ---
 
-## 5.2 `shifts`
+## 5.2 `practitioners`
+
+Canonical provider identity used for clinical care delivery, scheduling, telemedicine, and external interoperability. A practitioner may be backed by an internal `staff` record, but the practitioner model is intentionally separate so the system can also represent external consultants, visiting specialists, and EHR-synced providers who are not modeled as employees.
+
+| Field | Purpose |
+|---|---|
+| `id` | Unique identifier for the practitioner record |
+| `organization_id` | Organization the practitioner belongs to |
+| `staff_id` | Optional staff profile linked to this practitioner |
+| `external_practitioner_id` | Optional external/EHR provider reference |
+| `practitioner_code` | Internal practitioner/provider code |
+| `display_name` | Name shown to patients and staff |
+| `first_name` | Structured first name where required |
+| `last_name` | Structured last name where required |
+| `provider_type` | Type such as `doctor`, `nurse_practitioner`, `physician_assistant`, or `therapist` |
+| `specialty` | Specialty or clinical focus area |
+| `license_number` | Optional professional license identifier |
+| `telemedicine_enabled` | Whether this practitioner may be scheduled for telemedicine workflows |
+| `status` | Operational state such as `active`, `inactive`, or `suspended` |
+| `created_at` | Timestamp when the practitioner record was created |
+| `updated_at` | Timestamp when the practitioner record was last updated |
+
+> Recommended uniqueness constraints: `(organization_id, practitioner_code)` and `(organization_id, external_practitioner_id)` when the optional value is present. Recommended rule: `staff_id` should be unique when present so one internal staff profile does not back multiple practitioner identities unintentionally.
+
+---
+
+## 5.3 `practitioner_facilities`
+
+Many-to-many scope table linking practitioners to the facilities and optional departments where they practice.
+
+| Field | Purpose |
+|---|---|
+| `id` | Unique identifier for the practitioner-facility assignment |
+| `practitioner_id` | Practitioner assigned to the facility |
+| `facility_id` | Facility where the practitioner practices |
+| `department_id` | Optional department scope within the facility |
+| `is_primary` | Whether this is the practitioner's primary working location |
+| `status` | Assignment status such as `active` or `inactive` |
+| `created_at` | Timestamp when the assignment was created |
+| `updated_at` | Timestamp when the assignment was last updated |
+
+> Recommended uniqueness constraint: `(practitioner_id, facility_id, department_id)`.
+
+---
+
+## 5.4 `shifts`
 
 Reusable facility-defined shift templates/definitions.
 
@@ -263,7 +313,7 @@ Reusable facility-defined shift templates/definitions.
 
 ---
 
-## 5.3 `shift_assignments`
+## 5.5 `shift_assignments`
 
 Date-specific staff assignments to reusable shifts.
 
@@ -409,9 +459,133 @@ Structured allergy records for a patient. Separated from the general medical pro
 
 ---
 
-# 7. Clinical Workflow
+## 6.7 `consent_records`
 
-## 7.1 `patient_visits`
+Append-only history of patient communication consent state. This supports auditability, compliance review, and exact reconstruction of how outreach permissions changed over time without making CRM or other consumers scan unrelated patient history fields.
+
+| Field | Description |
+|---|---|
+| `id` | Unique identifier for the consent history record |
+| `organization_id` | Organization the consent record belongs to |
+| `patient_id` | Patient whose consent changed |
+| `patient_contact_id` | Optional linked contact method when the consent applies to a specific `patient_contacts` row |
+| `facility_id` | Optional facility context where the consent was captured |
+| `phone_number` | Optional phone number when consent is specific to one contact channel |
+| `voice_outbound_allowed` | Whether automated or workflow-driven voice outreach is allowed after this change |
+| `sms_outbound_allowed` | Whether automated or workflow-driven SMS outreach is allowed after this change |
+| `source` | Source such as `staff_entry`, `patient_portal`, `ehr_import`, `sms_reply`, or `automated_call` |
+| `collected_by` | User, system, or integration that recorded the consent state |
+| `effective_at` | Timestamp when this consent state took effect |
+| `notes` | Optional exceptional notes only |
+| `created_at` | Timestamp when the consent history row was created |
+
+> Important note: `consent_records` should be append-only. Updating prior consent rows should be disallowed.
+
+---
+
+## 6.8 `patient_current_consent`
+
+Current-state projection or direct-read table for the latest patient outreach consent. This exists to support strong-read operational checks without forcing consumers to compute current truth from `consent_records`.
+
+| Field | Description |
+|---|---|
+| `patient_id` | Patient whose current consent state is represented |
+| `organization_id` | Organization context |
+| `patient_contact_id` | Optional linked contact method when current consent is channel-specific |
+| `facility_id` | Optional primary facility context |
+| `phone_number` | Optional phone-specific current state |
+| `voice_outbound_allowed` | Current voice outreach permission |
+| `sms_outbound_allowed` | Current SMS outreach permission |
+| `source` | Source of the latest effective consent state |
+| `effective_at` | Timestamp when the current state took effect |
+| `updated_at` | Timestamp when the current-state projection was last refreshed |
+
+> Important note: this table is a current-state access path, not the historical audit trail. The append-only source of truth for consent history remains `consent_records`.
+
+---
+
+# 7. Appointments & Availability
+
+## 7.1 `appointments`
+
+Scheduled care interaction between a patient and a practitioner. This is the scheduling anchor before a clinical encounter actually starts. An appointment may later produce a `patient_visit`, but the two are intentionally separate so the system can represent booked, rescheduled, cancelled, no-show, and telemedicine appointments without forcing them to exist as active visits.
+
+| Field | Description |
+|---|---|
+| `id` | Unique identifier for the appointment |
+| `organization_id` | Organization that owns the appointment |
+| `facility_id` | Facility where the appointment is scheduled |
+| `department_id` | Optional department context for the appointment |
+| `patient_id` | Patient the appointment is for |
+| `practitioner_id` | Practitioner scheduled for the appointment |
+| `appointment_number` | Internal appointment identifier |
+| `appointment_type` | Type such as `consultation`, `follow_up`, `procedure`, or `telemedicine` |
+| `scheduled_for` | Scheduled start timestamp |
+| `duration_minutes` | Planned duration of the appointment |
+| `status` | State such as `scheduled`, `confirmed`, `rescheduled`, `cancelled`, `completed`, or `no_show` |
+| `location_type` | Where the encounter will occur, such as `physical_room`, `telemedicine`, or `home_visit` |
+| `location_details` | Structured or textual location details such as room name or virtual channel reference |
+| `chief_complaint` | Optional reason for the appointment |
+| `notes` | Scheduling notes visible to staff |
+| `patient_visit_id` | Optional linked visit once the appointment is checked in or fulfilled |
+| `created_by` | User who created the appointment |
+| `created_at` | Timestamp when the appointment was created |
+| `updated_at` | Timestamp when the appointment was last updated |
+
+> Recommended uniqueness constraint: `(organization_id, appointment_number)`. Recommended operational index: `(facility_id, scheduled_for, status)`.
+
+---
+
+## 7.2 `appointment_reschedule_history`
+
+Append-only audit trail of appointment time changes. This avoids mutating or overwriting prior scheduling history and supports downstream reporting on reschedules and no-show patterns.
+
+| Field | Description |
+|---|---|
+| `id` | Unique identifier for the reschedule history record |
+| `appointment_id` | Appointment whose time changed |
+| `previous_scheduled_for` | Prior scheduled timestamp |
+| `new_scheduled_for` | New scheduled timestamp |
+| `reason` | Optional reason for the reschedule |
+| `triggered_by` | User, system, or workflow that initiated the change |
+| `created_at` | Timestamp when the history record was created |
+
+> Important note: this table should be append-only. A reschedule creates a new history row rather than editing prior history.
+
+---
+
+## 7.3 `practitioner_availability`
+
+Bookable practitioner slot inventory used for appointment search, rescheduling, and telemedicine scheduling. This model is designed to support atomic hold and confirm semantics later at the service-contract layer.
+
+| Field | Description |
+|---|---|
+| `id` | Unique identifier for the availability slot |
+| `organization_id` | Organization that owns the slot |
+| `facility_id` | Facility where the slot is offered |
+| `department_id` | Optional department scope |
+| `practitioner_id` | Practitioner offering the slot |
+| `appointment_type` | Appointment type this slot can accept |
+| `starts_at` | Slot start timestamp |
+| `ends_at` | Slot end timestamp |
+| `duration_minutes` | Slot duration in minutes |
+| `status` | State such as `available`, `held`, `booked`, or `unavailable` |
+| `held_by_reference_type` | Optional holder type such as `conversation` or `workflow` |
+| `held_by_reference_id` | Optional holder identifier |
+| `held_until` | Hold expiry timestamp when the slot is temporarily reserved |
+| `external_slot_id` | Optional external/EHR slot identifier |
+| `source` | Source such as `ehr_sync`, `manual`, or `system_generated` |
+| `synced_at` | Last synchronization timestamp if the slot came from an upstream system |
+| `created_at` | Timestamp when the slot record was created |
+| `updated_at` | Timestamp when the slot was last updated |
+
+> Recommended uniqueness constraint: `(organization_id, practitioner_id, starts_at, ends_at)`. Critical rule: only one workflow may hold or confirm a currently available slot at a time.
+
+---
+
+# 8. Clinical Workflow
+
+## 8.1 `patient_visits`
 
 A single encounter or visit between a patient and the healthcare system. This is the main anchor for visit-specific workflow.
 
@@ -422,11 +596,12 @@ A single encounter or visit between a patient and the healthcare system. This is
 | `organization_id` | Organization where the visit occurred |
 | `facility_id` | Facility where the visit occurred |
 | `department_id` | Department handling the visit |
+| `appointment_id` | Optional originating appointment for the visit |
 | `visit_number` | Internal visit identifier |
 | `visit_type` | Type such as `outpatient`, `inpatient`, or `emergency` |
 | `status` | Workflow status such as `registered`, `triaged`, `in_consultation`, `completed`, or `cancelled` |
 | `chief_complaint` | Main presenting complaint or reason for visit |
-| `attending_staff_id` | Primary responsible clinician or staff member |
+| `attending_staff_id` | Primary operationally responsible clinician or staff member |
 | `referred_by` | Optional referral source |
 | `check_in_time` | Visit check-in timestamp |
 | `check_out_time` | Visit check-out timestamp |
@@ -435,7 +610,7 @@ A single encounter or visit between a patient and the healthcare system. This is
 
 ---
 
-## 7.2 `vitals`
+## 8.2 `vitals`
 
 Nurse triage and vital sign measurements captured during a visit.
 
@@ -458,15 +633,15 @@ Nurse triage and vital sign measurements captured during a visit.
 
 ---
 
-## 7.3 `consultations`
+## 8.3 `consultations`
 
-The doctor-clinician consultation session that occurs during a visit. Represents the direct clinical assessment session between patient and clinician.
+The clinician consultation session that occurs during a visit. Represents the direct clinical assessment session between patient and practitioner.
 
 | Field | Description |
 |---|---|
 | `id` | Unique identifier for the consultation |
 | `patient_visit_id` | Visit the consultation belongs to |
-| `clinician_id` | Clinician conducting the consultation |
+| `practitioner_id` | Practitioner conducting the consultation |
 | `consultation_type` | Type of consultation |
 | `consultation_notes` | Narrative notes from the session |
 | `assessment` | Clinical assessment summary |
@@ -478,7 +653,7 @@ The doctor-clinician consultation session that occurs during a visit. Represents
 
 ---
 
-## 7.4 `ehr_records`
+## 8.4 `ehr_records`
 
 Generic clinical documentation entries created during a visit or consultation. Supports a variety of clinical note types without forcing all documentation into the consultation table.
 
@@ -496,7 +671,7 @@ Generic clinical documentation entries created during a visit or consultation. S
 
 ---
 
-## 7.5 `consultation_diagnoses`
+## 8.5 `consultation_diagnoses`
 
 Diagnosis records assigned during a consultation. Links the consultation session to structured diagnosis codes (see section 8.1).
 
@@ -511,7 +686,7 @@ Diagnosis records assigned during a consultation. Links the consultation session
 
 ---
 
-## 7.6 `consultation_services`
+## 8.6 `consultation_services`
 
 Services actually rendered during a consultation. Distinct from diagnosis; records what was done, how much, and at what cost. References the `service_catalog` (section 8.2).
 
@@ -528,7 +703,7 @@ Services actually rendered during a consultation. Distinct from diagnosis; recor
 
 ---
 
-## 7.7 `lab_orders`
+## 8.7 `lab_orders`
 
 Laboratory test requests generated during a visit or consultation.
 
@@ -547,7 +722,7 @@ Laboratory test requests generated during a visit or consultation.
 
 ---
 
-## 7.8 `lab_results`
+## 8.8 `lab_results`
 
 Laboratory test results associated with lab orders.
 
@@ -566,7 +741,7 @@ Laboratory test results associated with lab orders.
 
 ---
 
-## 7.9 `imaging_orders`
+## 8.9 `imaging_orders`
 
 Imaging requests generated during a visit or consultation. Examples: X-ray, ultrasound, CT, MRI.
 
@@ -586,7 +761,7 @@ Imaging requests generated during a visit or consultation. Examples: X-ray, ultr
 
 ---
 
-## 7.10 `imaging_results`
+## 8.10 `imaging_results`
 
 Result reports for completed imaging orders.
 
@@ -603,7 +778,7 @@ Result reports for completed imaging orders.
 
 ---
 
-## 7.11 `prescriptions`
+## 8.11 `prescriptions`
 
 Medication prescriptions generated during a visit or consultation. Optionally connects to the inventory system via `inventory_item_id` (section 10.3).
 
@@ -627,9 +802,9 @@ Medication prescriptions generated during a visit or consultation. Optionally co
 
 ---
 
-# 8. Clinical Catalogs
+# 9. Clinical Catalogs
 
-## 8.1 `diagnosis_codes`
+## 9.1 `diagnosis_codes`
 
 The diagnosis code catalog used by the organization. May support ICD-based codes and local extensions.
 
@@ -646,7 +821,7 @@ The diagnosis code catalog used by the organization. May support ICD-based codes
 
 ---
 
-## 8.2 `service_catalog`
+## 9.2 `service_catalog`
 
 The organization's catalog of clinical or operational services that can be rendered and potentially billed. Examples: consultation fees, dressings, tests, procedures, imaging services.
 
@@ -665,9 +840,9 @@ The organization's catalog of clinical or operational services that can be rende
 
 ---
 
-# 9. Ward & Bed Management
+# 10. Ward & Bed Management
 
-## 9.1 `wards`
+## 10.1 `wards`
 
 Represents a ward or unit within a facility. Examples: Male Ward, Female Ward, Pediatric Ward, ICU, Maternity Ward.
 
@@ -689,7 +864,7 @@ Represents a ward or unit within a facility. Examples: Male Ward, Female Ward, P
 
 ---
 
-## 9.2 `beds`
+## 10.2 `beds`
 
 Represents individual beds within a ward.
 
@@ -709,7 +884,7 @@ Represents individual beds within a ward.
 
 ---
 
-## 9.3 `bed_assignments`
+## 10.3 `bed_assignments`
 
 Tracks which patient visit is assigned to which bed over time. Models admissions, transfers, discharges, and occupancy history.
 
@@ -730,11 +905,11 @@ Tracks which patient visit is assigned to which bed over time. Models admissions
 
 ---
 
-# 10. Inventory
+# 11. Inventory
 
 The inventory model is a **configurable inventory engine**. A pharmacy, laundry store, lab reagent store, and central warehouse are all represented as `inventory_units` with different `inventory_type` values, using the same underlying stock and transaction tables.
 
-## 10.1 `inventory_units`
+## 11.1 `inventory_units`
 
 A logical stock-holding unit, store, or inventory location within an organization or facility. Examples: Main Pharmacy, Emergency Store, Central Warehouse, Laundry Supplies, Lab Reagents Store.
 
@@ -754,7 +929,7 @@ A logical stock-holding unit, store, or inventory location within an organizatio
 
 ---
 
-## 10.2 `inventory_categories`
+## 11.2 `inventory_categories`
 
 Item groupings used to classify inventory items. Examples: Drugs, Consumables, Reagents, Linens, Cleaning Supplies, Equipment Accessories.
 
@@ -770,7 +945,7 @@ Item groupings used to classify inventory items. Examples: Drugs, Consumables, R
 
 ---
 
-## 10.3 `inventory_items`
+## 11.3 `inventory_items`
 
 The organization's master list of inventory items. This is the core item catalog and is not tied to one specific inventory unit — the same item can exist in multiple inventory units.
 
@@ -793,7 +968,7 @@ The organization's master list of inventory items. This is the core item catalog
 
 ---
 
-## 10.4 `inventory_stock`
+## 11.4 `inventory_stock`
 
 Current stock balance of a particular inventory item within a specific inventory unit. Answers questions such as "How much Paracetamol is currently in Main Pharmacy?".
 
@@ -811,7 +986,7 @@ Current stock balance of a particular inventory item within a specific inventory
 
 ---
 
-## 10.5 `inventory_transactions`
+## 11.5 `inventory_transactions`
 
 Movement history of inventory items — explains how stock changed over time.
 
@@ -843,9 +1018,9 @@ Transaction types include: `STOCK_IN`, `ISSUE_OUT`, `TRANSFER`, `ADJUSTMENT`, `R
 
 ---
 
-# 11. Billing & Finance
+# 12. Billing & Finance
 
-## 11.1 `invoices`
+## 12.1 `invoices`
 
 The invoice header or billing document for a patient encounter. Represents the overall bill and summarizes financial totals for a patient visit.
 
@@ -872,7 +1047,7 @@ The invoice header or billing document for a patient encounter. Represents the o
 
 ---
 
-## 11.2 `invoice_items`
+## 12.2 `invoice_items`
 
 Line items that make up an invoice. Each record represents one charge component on the invoice (consultation fee, lab test charge, imaging charge, medication charge, procedure charge, etc.).
 
@@ -895,7 +1070,7 @@ Line items that make up an invoice. Each record represents one charge component 
 
 ---
 
-## 11.3 `payments`
+## 12.3 `payments`
 
 Actual payment transactions received against invoices. A payment record represents money collection activity, not the invoice itself.
 
@@ -918,7 +1093,7 @@ Actual payment transactions received against invoices. A payment record represen
 
 ---
 
-## 11.4 `payment_allocations`
+## 12.4 `payment_allocations`
 
 Mapping between payments and invoices. Supports one invoice paid by multiple payments, one payment partly or fully allocated to an invoice, and (future) one payment covering multiple invoices.
 
@@ -932,7 +1107,7 @@ Mapping between payments and invoices. Supports one invoice paid by multiple pay
 
 ---
 
-## 11.5 `refunds`
+## 12.5 `refunds`
 
 Refund records for money returned after a payment has already been received. Used when a facility needs to return money to a patient or payer due to overpayment, cancellation, billing error, duplicate payment, service non-delivery, or other financial correction.
 
@@ -957,7 +1132,7 @@ Refund records for money returned after a payment has already been received. Use
 
 ---
 
-## 11.6 `insurance_claims`
+## 12.6 `insurance_claims`
 
 Claims submitted to an insurer for charges related to a patient visit and invoice. Tracks the financial claim process independently from direct cash or gateway payments.
 
@@ -983,9 +1158,9 @@ Claims submitted to an insurer for charges related to a patient visit and invoic
 
 ---
 
-# 12. System Tables
+# 13. System Tables
 
-## 12.1 `audit_logs`
+## 13.1 `audit_logs`
 
 Immutable trace records for security, compliance, and activity tracking.
 
@@ -1013,7 +1188,7 @@ Immutable trace records for security, compliance, and activity tracking.
 
 ---
 
-## 12.2 `notifications`
+## 13.2 `notifications`
 
 User-targeted system notifications.
 
@@ -1032,48 +1207,58 @@ User-targeted system notifications.
 
 ---
 
-# 13. Relationship Summary
+# 14. Relationship Summary
 
-## 13.1 Organizational structure
+## 14.1 Organizational structure
 - One `organization` can have many `facilities`
 - One `facility` can optionally be the child of another `facility` (`parent_facility_id`)
 - One `facility` can have many `departments`
 
-## 13.2 Access control
+## 14.2 Access control
 - One `organization` defines many `roles`
 - One `role` has many `permissions`
 - One `user` has many `roles` through `user_roles`
 - One `user` has access to many `facilities` through `user_facilities`
 - One `user` has many `user_sessions`
 
-## 13.3 Workforce & scheduling
+## 14.3 Workforce & scheduling
 - One `organization` employs many `staff`
 - One `user` may map to one `staff` profile
 - One `staff` member has one `primary_facility` and one `primary_department`
+- One `organization` defines many `practitioners`
+- One `practitioner` may map to one `staff` profile
+- One `practitioner` may practice at many `facilities` through `practitioner_facilities`
+- One `patient` can have many `appointments`
+- One `practitioner` can have many `appointments`
+- One `appointment` can have many `appointment_reschedule_history` records
+- One `practitioner` can have many `practitioner_availability` slots
 - One `facility` defines many `shifts`; one `department` scopes many `shifts`
 - One `staff` member has many `shift_assignments`; one `shift` has many `shift_assignments`
 
-## 13.4 Patient domain
+## 14.4 Patient domain
 - One `organization` owns many `patients`
-- One `patient` has many `patient_contacts`, `patient_addresses`, `patient_insurance`, `patient_allergies`
+- One `patient` has many `patient_contacts`, `patient_addresses`, `patient_insurance`, `patient_allergies`, `consent_records`
 - One `patient` has one (or versioned) `patient_medical_profiles`
+- One `patient` may have one or more `patient_current_consent` projections depending on phone-specific modeling
 - One `patient` has many `patient_visits`
 
-## 13.5 Clinical workflow
+## 14.5 Clinical workflow
+- One `appointment` may produce one `patient_visit`
 - One `patient_visit` has many `vitals`, `consultations`, `ehr_records`, `lab_orders`, `imaging_orders`, `prescriptions`
+- One `practitioner` has many `consultations`
 - One `consultation` has many `ehr_records`, `consultation_diagnoses`, `consultation_services`, `lab_orders`, `imaging_orders`, `prescriptions`
 - One `lab_order` produces one or more `lab_results`
 - One `imaging_order` produces one or more `imaging_results`
 - `diagnosis_codes` are referenced by `consultation_diagnoses`
 - `service_catalog` entries are referenced by `consultation_services`, `lab_orders`, and `imaging_orders`
 
-## 13.6 Ward & bed management
+## 14.6 Ward & bed management
 - One `facility` contains many `wards`
 - One `ward` contains many `beds`
 - One `bed` has many `bed_assignments` over time (only one active at a time)
 - One `patient_visit` may have many `bed_assignments` (admissions + transfers)
 
-## 13.7 Inventory
+## 14.7 Inventory
 - One `organization` owns many `inventory_units`, `inventory_categories`, `inventory_items`
 - One `facility` contains many `inventory_units`; one `department` may optionally scope an `inventory_unit`
 - One `inventory_category` groups many `inventory_items`
@@ -1082,7 +1267,7 @@ User-targeted system notifications.
 - One `inventory_item` appears in many `inventory_transactions`
 - One `inventory_unit` participates in many `inventory_transactions` as source or destination
 
-## 13.8 Billing & finance
+## 14.8 Billing & finance
 - One `patient_visit` can generate one or more `invoices`
 - One `invoice` contains many `invoice_items`
 - One `invoice` can receive many `payment_allocations`
@@ -1091,18 +1276,29 @@ User-targeted system notifications.
 - One `invoice` can have one or more `insurance_claims`
 - One `patient_insurance` can be used by many `insurance_claims`
 
-## 13.9 System
+## 14.9 System
 - `audit_logs` are scoped to organizations and optionally facilities
 - `notifications` are scoped to organizations and optionally facilities, and are delivered to users
 
 ---
 
-# 14. Cross-Domain Relationships
+# 15. Cross-Domain Relationships
 
 This section makes explicit the foreign key relationships that span domain boundaries. These are the links the individual domain documents only hinted at.
 
 | From | Field | To | Notes |
 |---|---|---|---|
+| `appointments` | `patient_id` | `patients.id` | Appointment subject |
+| `appointments` | `practitioner_id` | `practitioners.id` | Scheduled provider |
+| `appointments` | `facility_id`, `department_id` | `facilities.id`, `departments.id` | Scheduling context |
+| `appointment_reschedule_history` | `appointment_id` | `appointments.id` | Append-only schedule change trail |
+| `practitioner_availability` | `practitioner_id` | `practitioners.id` | Slot owner |
+| `practitioner_availability` | `facility_id`, `department_id` | `facilities.id`, `departments.id` | Slot context |
+| `consent_records` | `patient_id` | `patients.id` | Append-only patient consent history |
+| `consent_records` | `patient_contact_id` | `patient_contacts.id` | Optional channel-specific consent linkage |
+| `patient_current_consent` | `patient_id` | `patients.id` | Current consent read path |
+| `patient_current_consent` | `patient_contact_id` | `patient_contacts.id` | Optional current contact-specific consent linkage |
+| `patient_visits` | `appointment_id` | `appointments.id` | Visit may originate from a scheduled appointment |
 | `consultation_services` | `service_id` | `service_catalog.id` | Services rendered in a consultation reference the catalog |
 | `lab_orders` | `service_id` | `service_catalog.id` | Optional billing link for lab tests |
 | `imaging_orders` | `service_id` | `service_catalog.id` | Optional billing link for imaging studies |
@@ -1117,11 +1313,14 @@ This section makes explicit the foreign key relationships that span domain bound
 | `insurance_claims` | `invoice_id` | `invoices.id` | Claim is filed against a specific invoice |
 | `insurance_claims` | `patient_visit_id` | `patient_visits.id` | Claim is scoped to the visit it relates to |
 | `payments.received_by`, `refunds.processed_by`, `shift_assignments.assigned_by`, `user_roles.assigned_by`, `user_facilities.assigned_by`, `shifts.created_by`, `vitals.recorded_by`, `ehr_records.recorded_by`, `lab_results.performed_by`/`verified_by`, `imaging_results.performed_by`/`reported_by`, `prescriptions.prescribed_by`, `lab_orders.ordered_by`, `imaging_orders.ordered_by`, `bed_assignments.assigned_by`, `inventory_transactions.performed_by`, `patient_allergies.noted_by` | — | `users.id` (or `staff.id` where indicated) | Actor references |
-| `consultations.clinician_id`, `patient_visits.attending_staff_id` | — | `staff.id` | Clinical actors |
+| `practitioners.staff_id` | — | `staff.id` | Optional link from practitioner identity to internal workforce profile |
+| `practitioner_facilities.facility_id`, `practitioner_facilities.department_id` | — | `facilities.id`, `departments.id` | Where the practitioner practices |
+| `consultations.practitioner_id` | — | `practitioners.id` | Clinical provider conducting the consultation |
+| `patient_visits.attending_staff_id` | — | `staff.id` | Operationally responsible staff member for the visit |
 
 ---
 
-# 15. Unified ER Diagram
+# 16. Unified ER Diagram
 
 ```mermaid
 erDiagram
@@ -1888,7 +2087,7 @@ erDiagram
 
 ---
 
-# 16. End-to-End Workflow Reference
+# 17. End-to-End Workflow Reference
 
 The following flow illustrates how a patient typically moves through the system and how records connect across domains.
 
@@ -1945,38 +2144,42 @@ flowchart TD
 
 ---
 
-# 17. Practical Interpretation
+# 18. Practical Interpretation
 
-## 17.1 Patient onboarding
+## 18.1 Patient onboarding
 A patient is created in `patients` with supporting records in `patient_contacts`, `patient_addresses`, `patient_insurance`, `patient_medical_profiles`, and `patient_allergies`.
 
-## 17.2 Visit lifecycle
-A new `patient_visits` row is created on arrival and becomes the anchor for all encounter-specific data. Nurse triage produces `vitals`. Doctor assessment produces `consultations` (and optionally `ehr_records`). Diagnoses are recorded in `consultation_diagnoses` referencing `diagnosis_codes`. Services rendered go into `consultation_services`, lab and imaging requests go into `lab_orders` and `imaging_orders` with corresponding results, and medications go into `prescriptions`.
+## 18.2 Appointment lifecycle
+A scheduled encounter is created in `appointments` for a `patient` and `practitioner`. If the time changes, an append-only `appointment_reschedule_history` row is created. Available time windows for booking and rescheduling are represented in `practitioner_availability`.
 
-## 17.3 Inpatient admission
+## 18.3 Visit lifecycle
+When the patient arrives or the encounter begins, a `patient_visits` row may be created from the appointment and becomes the anchor for encounter-specific care data. Nurse triage produces `vitals`. Practitioner assessment produces `consultations` (and optionally `ehr_records`). Diagnoses are recorded in `consultation_diagnoses` referencing `diagnosis_codes`. Services rendered go into `consultation_services`, lab and imaging requests go into `lab_orders` and `imaging_orders` with corresponding results, and medications go into `prescriptions`.
+
+## 18.4 Inpatient admission
 For inpatient visits, a `bed_assignments` row assigns the visit to a bed in a ward. Transfers create new assignment rows; discharge closes the active assignment via `released_at`.
 
-## 17.4 Pharmacy dispensing
+## 18.5 Pharmacy dispensing
 When a `prescriptions` row is tied to an `inventory_item_id`, dispensing creates an `inventory_transactions` row of type `ISSUE_OUT` against the relevant pharmacy `inventory_unit`, referencing the prescription through `reference_type='prescription'` and `reference_id`. `inventory_stock.quantity_on_hand` is updated accordingly.
 
-## 17.5 Billing
+## 18.6 Billing
 Billable work from the visit is aggregated into an `invoices` row with corresponding `invoice_items`. Each invoice item uses `reference_type` + `reference_id` to point back to its operational source (`consultation_services`, `lab_orders`, `imaging_orders`, or `prescriptions`). Payments received are recorded in `payments` and linked to invoices through `payment_allocations`, supporting partial and installment payments. Refunds are tied to the original payment via `refunds`.
 
-## 17.6 Insurance claims
+## 18.7 Insurance claims
 If the patient has verified `patient_insurance`, an `insurance_claims` row is created against the `invoice_id` and `patient_visit_id`, with `patient_insurance_id` pointing to the specific policy used. Claim lifecycle fields (`submitted_at`, `adjudicated_at`, `paid_at`) track progress independently from direct `payments`.
 
-## 17.7 System cross-cutting
+## 18.8 System cross-cutting
 Every significant mutation can be traced through `audit_logs`, scoped to the organization and optionally the facility. User-targeted messages go through `notifications`.
 
 ---
 
-# 18. Future Extensions
+# 19. Future Extensions
 
 The schema is intentionally structured so these additions will not require core changes:
 
 - Bed reservations and planned admissions
 - Formal admission/discharge lifecycle tables
 - Ward staffing assignments
+- Telemedicine sessions, participants, and session-event timelines
 - Bed cleaning and maintenance logs
 - Occupancy dashboards and analytics
 - Inventory custom-field extensions

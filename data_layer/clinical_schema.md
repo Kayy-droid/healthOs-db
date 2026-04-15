@@ -80,6 +80,10 @@ Contact methods for a patient such as phone numbers and email addresses.
 
 This supports multiple contact methods per patient.
 
+Consent does not belong in this table.
+This table stores how a patient can be reached.
+Consent should live in dedicated consent-history and current-consent tables and may reference `patient_contacts.id` when the permission is specific to one phone number or email.
+
 ### Fields
 
 | Field          | Description                                          |
@@ -91,6 +95,12 @@ This supports multiple contact methods per patient.
 | `is_primary`   | Indicates whether this is the primary contact method |
 | `created_at`   | Timestamp when the contact was created               |
 | `updated_at`   | Timestamp when the contact was last updated          |
+
+### Important note
+
+Do not add outreach permission flags such as voice or SMS opt-in directly to `patient_contacts`.
+Those flags change over time, need audit history, and may differ by purpose or workflow.
+Use consent tables for permission truth and link back to `patient_contacts` when needed.
 
 ---
 
