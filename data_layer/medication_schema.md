@@ -72,6 +72,7 @@ This is the main medication truth that CRM adherence workflows, refill workflows
 | `status` | Status such as `active`, `paused`, `completed`, `discontinued`, or `expired` |
 | `prescribing_practitioner_id` | Optional practitioner responsible for the current therapy plan |
 | `notes` | Medication-level notes relevant across encounters |
+| `version` | Monotonic version counter incremented on every status or field update, used for optimistic concurrency by CRM adherence workflows |
 | `created_at` | Timestamp when the patient medication record was created |
 | `updated_at` | Timestamp when the patient medication record was last updated |
 
@@ -138,6 +139,11 @@ Append-only results of adherence and refill-related outreach or checks linked to
 ### Important note
 
 This table stores workflow outputs linked to canonical medication truth. It is not a replacement for `patient_medications`.
+
+### CRM contract note
+
+Team B should expose a first-class create method for this record in the CRM-facing DB-service contract.
+Medication adherence workflows should not be forced to leave this outcome only in workflow state or artifact payloads.
 
 ---
 
@@ -209,6 +215,7 @@ erDiagram
         string status
         int prescribing_practitioner_id FK
         text notes
+        int version
         datetime created_at
         datetime updated_at
     }

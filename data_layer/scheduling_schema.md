@@ -63,7 +63,10 @@ Scheduled care interactions between patients and practitioners.
 | `status` | Status such as `scheduled`, `confirmed`, `rescheduled`, `completed`, `cancelled`, or `no_show` |
 | `visit_mode` | Mode such as `in_person`, `telemedicine_video`, or `telemedicine_voice` |
 | `chief_complaint` | Optional presenting reason |
+| `location` | Optional location detail such as room, floor, or virtual link |
+| `reminder_state` | Current reminder workflow state such as `not_started`, `scheduled`, `sent`, `acknowledged`, `rescheduled`, or `suppressed` |
 | `notes` | Optional operational scheduling notes |
+| `version` | Monotonic version counter incremented on every update, used for optimistic concurrency by CRM reminder and reschedule workflows |
 | `created_at` | Timestamp when the appointment was created |
 | `updated_at` | Timestamp when the appointment was last updated |
 

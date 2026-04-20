@@ -82,12 +82,16 @@ Examples include appointment reminders, medication adherence outreach, care feed
 | `appointment_id` | Optional appointment link when the workflow is appointment-driven |
 | `patient_medication_id` | Optional medication link when the workflow is medication-driven |
 | `telemedicine_session_id` | Optional telemedicine session link when the workflow is session-driven |
+| `workflow_campaign_id` | Optional campaign link when the workflow was launched as part of a bulk CRM run |
 | `context_version` | Runtime context version used by CRM |
 | `scheduled_for` | Planned execution time if scheduled |
 | `started_at` | Execution start timestamp |
 | `completed_at` | Execution completion timestamp |
 | `failure_reason` | Optional terminal or latest failure reason |
+| `retry_count` | Number of execution attempts made so far |
+| `next_retry_at` | Scheduled timestamp for the next retry attempt if applicable |
 | `created_by` | User, system, or integration that created the workflow |
+| `version` | Monotonic version counter incremented on every status or state update, used for compare-and-set concurrency control |
 | `created_at` | Timestamp when the workflow was created |
 | `updated_at` | Timestamp when the workflow was last updated |
 
@@ -118,6 +122,7 @@ The durable envelope for a CRM interaction thread across one workflow or one ad 
 | `started_at` | When the conversation started |
 | `ended_at` | When the conversation ended |
 | `summary` | Optional concise operational summary |
+| `version` | Monotonic version counter incremented on every patch, used for compare-and-set concurrency control |
 | `created_at` | Timestamp when the conversation was created |
 | `updated_at` | Timestamp when the conversation was last updated |
 
@@ -163,13 +168,14 @@ Durable call execution records for outbound or inbound CRM voice interactions.
 | `call_type` | Type such as `appointment_reminder`, `medication_adherence`, `care_feedback`, or `general_call` |
 | `direction` | `outbound` or `inbound` |
 | `provider` | Telephony provider |
-| `provider_call_id` | Provider-specific call identifier used for callback correlation |
+| `provider_call_sid` | Provider-specific call identifier used for callback correlation |
 | `status` | Status such as `queued`, `ringing`, `in_progress`, `completed`, `failed`, `cancelled`, or `no_answer` |
 | `started_at` | When the call connected or began execution |
 | `ended_at` | When the call ended |
 | `recording_ref` | Optional recording reference |
 | `transcript_ref` | Optional transcript reference |
 | `outcome_summary` | Optional concise operational outcome summary |
+| `version` | Monotonic version counter incremented on every status update, used for idempotency and concurrency control on provider callback paths |
 | `created_at` | Timestamp when the call was created |
 | `updated_at` | Timestamp when the call was last updated |
 
@@ -220,6 +226,7 @@ Durable SMS or messaging-thread metadata for CRM-managed contact threads.
 | `provider_thread_id` | Provider-specific thread identifier |
 | `status` | Status such as `active`, `completed`, `failed`, or `opted_out` |
 | `last_message_at` | Timestamp of the latest thread activity |
+| `version` | Monotonic version counter incremented on every status update |
 | `created_at` | Timestamp when the thread was created |
 | `updated_at` | Timestamp when the thread was last updated |
 
@@ -247,6 +254,7 @@ Durable records for asynchronous or multi-stage CRM work such as extraction, exp
 | `started_at` | When processing started |
 | `completed_at` | When processing completed |
 | `failure_reason` | Optional failure reason |
+| `version` | Monotonic version counter incremented on every status update |
 | `created_at` | Timestamp when the operation was created |
 | `updated_at` | Timestamp when the operation was last updated |
 
@@ -353,12 +361,39 @@ Grouping and progress state for bulk CRM launches such as reminder waves or outr
 | `completed_count` | Count of completed child executions |
 | `failed_count` | Count of failed child executions |
 | `cancelled_count` | Count of cancelled child executions |
+| `version` | Monotonic version counter incremented on every mutable campaign update or counter change |
 | `created_at` | Timestamp when the campaign was created |
 | `updated_at` | Timestamp when the campaign was last updated |
 
 ---
 
-## 12. `staff_notifications`
+## 12. `webhook_subscriptions`
+
+### What it stores
+
+Durable webhook delivery targets that CRM runtime components may resolve when they need to fan out lifecycle events to subscribed consumers.
+
+### Fields
+
+| Field | Description |
+|---|---|
+| `id` | Unique subscription identifier |
+| `organization_id` | Organization that owns the subscription |
+| `target_url` | Destination URL for webhook delivery |
+| `event_type` | Event type the subscription listens to |
+| `status` | Status such as `active`, `paused`, or `disabled` |
+| `signing_secret_ref` | Reference to the signing secret material rather than the secret value itself |
+| `created_at` | Timestamp when the subscription was created |
+| `updated_at` | Timestamp when the subscription was last updated |
+
+### Important note
+
+This record is delivery configuration, not CRM execution state.
+It still needs a durable Team B home because CRM runtime delivery depends on querying active subscriptions.
+
+---
+
+## 13. `staff_notifications`
 
 ### What it stores
 
@@ -385,7 +420,7 @@ Structured staff-facing notifications or alert records produced by CRM execution
 
 ---
 
-## 13. `symptom_reports`
+## 14. `symptom_reports`
 
 ### What it stores
 
@@ -412,7 +447,7 @@ Structured symptom or triage outputs captured by CRM workflows and linked to the
 
 ---
 
-## 14. `patient_feedback`
+## 15. `patient_feedback`
 
 ### What it stores
 
@@ -438,7 +473,7 @@ Structured care-experience feedback captured by CRM workflows.
 
 ---
 
-## 15. `handoff_requests`
+## 16. `handoff_requests`
 
 ### What it stores
 
@@ -474,7 +509,8 @@ Structured follow-up requests created when CRM determines a human should take ov
 * One `conversation` can have many `conversation_context_switches`, `calls`, `operations`, and `artifacts`
 * One `call` can have many `call_events`
 * One `artifact` can have many `artifact_exports`
-* One `workflow_campaign` can group many `workflows`
+* One `workflow_campaign` can group many `workflows` through `workflows.workflow_campaign_id`
+* One `webhook_subscription` represents one organization-scoped listener for one event type
 
 ## CRM output relationships
 
@@ -594,4 +630,5 @@ Reject a CRM-side design if it:
 - introduces a second patient, appointment, medication, practitioner, or consent master
 - stores operational outcomes only inside artifact payloads when staff need structured queries
 - collapses call-provider callback state into scheduling or clinical tables
+- leaves webhook delivery configuration without a durable Team B-owned home while CRM runtime depends on active subscription lookup
 - treats telemedicine session truth as just another CRM call status

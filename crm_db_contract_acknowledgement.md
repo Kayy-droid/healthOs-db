@@ -35,6 +35,9 @@ It is also informed by the DB-side schema work in:
 - `healthOs-db/data_layer/medication_schema.md`
 - `healthOs-db/data_layer/scheduling_schema.md`
 - `healthOs-db/data_layer/crm_service_schema.md`
+- `healthOs-db/db_service_contract_response.md`
+- `healthOs-db/db_event_contract.md`
+- `healthOs-db/crm_controlled_enum_registry.md`
 
 ---
 
@@ -61,56 +64,31 @@ They are not automatically canonical table fields on every entity.
 
 ---
 
-## Naming Alignment: `tenant_id` vs `organization_id`
+## Naming Alignment: `organization_id` (Agreed)
 
-CRM uses `tenant_id` as its top-level ownership and isolation key.
+Status: RESOLVED — 2026-04-15
 
-The current DB-side schema uses `organization_id` in most canonical tables for that same role.
+CRM has agreed to adopt `organization_id` as the canonical top-level ownership and isolation key across all service contracts, DTOs, and request metadata envelopes.
 
-That mismatch must not be left implicit.
+The `tenant_id` name is retired from the CRM-DB interface. Both sides will use `organization_id`.
 
-### DB-side interpretation
+### Agreed naming
 
-For the current healthOS DB design:
-
-| CRM term | DB-side term | Meaning |
+| Scope key | Agreed name | Notes |
 |---|---|---|
-| `tenant_id` | `organization_id` | top-level customer or owning organizational scope |
-| `facility_id` | `facility_id` | facility scope within the tenant/organization |
+| top-level ownership / isolation | `organization_id` | used in all CRM DTOs, request envelopes, and DB schema |
+| facility scope within the organization | `facility_id` | unchanged; both sides already aligned |
 
-### Practical rule
+### What this means going forward
 
-Unless later separated by a deliberate multi-tenant architecture decision:
+- CRM must update all DTOs, request envelope definitions, and contract documents to use `organization_id` in place of `tenant_id`
+- DB schema remains as-is; no migration required
+- Any future multi-tenant architecture that introduces a true distinction between tenant and organization will require an explicit versioned contract change on both sides
 
-- CRM `tenant_id` should map to DB `organization_id`
-- they should be treated as the same logical scope key at the current stage
+### What has been updated
 
-### What this means for the contract
-
-CRM should not assume the DB schema literally contains a `tenant_id` column everywhere.
-
-DB should not assume CRM understands that `organization_id` is the equivalent without being told.
-
-So the contract position is:
-
-| Topic | Position |
-|---|---|
-| logical scope key | shared and required |
-| CRM contract name | `tenant_id` |
-| current DB schema name | `organization_id` |
-| mapping rule | `tenant_id -> organization_id` unless explicitly overridden in a future design |
-
-### Why this matters
-
-Without this clarification:
-
-- CRM may ask for `tenant_id` while DB returns or stores `organization_id`
-- both sides may think they agree while using different names
-- contract and schema drift begins immediately
-
-This document therefore treats `tenant_id` and `organization_id` as equivalent logical identifiers in the current design.
-
-If the platform later introduces a true distinction between tenant and organization, that will require an explicit versioned contract change and schema decision.
+- CRM-facing request metadata envelope now uses `organization_id`
+- The "Required Clarifications CRM Should Receive Back" and "Where CRM Should Adjust Expectations" sections below reflect this as closed
 
 ---
 
@@ -124,9 +102,9 @@ The current DB-side design can support CRM cleanly, but only if the following bo
 | CRM execution entities | supported and DB-backed through CRM service schema |
 | Request metadata | should be treated as service-envelope metadata, not universal entity columns |
 | Idempotency | required for selected operations, but must be defined at the service-contract layer |
-| Record versioning | required for mutable records used by CRM, but not yet written into DB-side contract docs |
+| Record versioning | required and now written into schema docs: `version` field added to all mutable CRM-facing records |
 | Compare-and-set concurrency | required for scheduling and selected execution-state updates |
-| Event publication | required by CRM handoff, but not yet documented on DB side |
+| Event publication | accepted | DB-side event contract now documented in `db_event_contract.md` |
 
 Short version:
 
@@ -155,12 +133,12 @@ Short version:
 | ownership model | `accepted` | CRM and DB align that DB owns durable truth and CRM owns execution state |
 | canonical entities | `accepted with mapping` | mostly aligned, but some CRM names do not match DB naming exactly |
 | request metadata envelope | `accepted with refinement` | valid contract metadata, but not default table columns |
-| versioning and optimistic concurrency | `accepted with refinement` | required, but not yet defined operation by operation on DB side |
+| versioning and optimistic concurrency | `accepted` | `version` field now present on all mutable CRM-facing records; compare-and-set operations defined per entity |
 | idempotency | `accepted with refinement` | required, but replay semantics still need explicit contract wording |
 | scheduling atomicity | `accepted` | required and already aligned with DB scheduling design |
 | custom form ownership | `accepted` | DB owns tenant-authored custom forms only |
-| DB-originated events | `pending clarification` | CRM is right to ask, but DB-side event contract is not written yet |
-| controlled enum sets | `accepted with refinement` | must be controlled, but not all values are ratified yet |
+| DB-originated events | `accepted` | CRM is right to ask, and DB-side event contract is now written in `db_event_contract.md` |
+| controlled enum sets | `accepted` | the CRM-facing V1 controlled values are now ratified in `crm_controlled_enum_registry.md` |
 | diagnosis outcome persistence | `accepted with refinement` | artifact-only is weak if the app needs direct querying |
 
 ---
@@ -169,7 +147,7 @@ Short version:
 
 | CRM term | DB-side term or home | Review status | Notes |
 |---|---|---|---|
-| `Tenant` | `organizations` | `accepted with mapping` | CRM `tenant_id` maps to DB `organization_id` in the current design |
+| `Tenant` | `organizations` | `accepted` | naming resolved 2026-04-15: both sides use `organization_id` |
 | `Facility` | `facilities` | `accepted` | names align |
 | `User` | `users` and in some cases `staff` | `accepted with mapping` | user identity and workforce records should not be blurred |
 | `Patient` | `patients` | `accepted` | names align |
@@ -205,7 +183,7 @@ The CRM documents ask for the following classes of support.
 | Safe mutation semantics | idempotent create/patch, compare-and-set where needed | valid and required for correctness |
 | Scheduling correctness | atomic hold, confirm, release | valid and required |
 | Custom forms | versioned published custom form lookup | valid and already aligned with current DB direction |
-| Eventing | DB-originated events for visibility and cancellation/state propagation | valid but not yet documented on DB side |
+| Eventing | DB-originated events for visibility and cancellation/state propagation | valid and now documented on DB side |
 | SLA/degraded mode | strong-read paths fail closed where correctness matters | valid and aligned in principle |
 
 ---
@@ -216,15 +194,17 @@ The CRM documents ask for the following classes of support.
 |---|---|---|
 | `get_tenant`, `get_facility`, `get_user` | `accepted with mapping` | valid, but `get_tenant` currently maps to organization-level ownership |
 | `get_patient`, `find_patient_by_phone`, `get_current_consent_state` | `accepted` | valid hot-path reads; consent remains a dedicated model |
-| `get_appointment`, `list_upcoming_patient_appointments`, `patch_appointment_reminder_state`, `append_appointment_reschedule_history` | `accepted with refinement` | valid, but reminder-state semantics need explicit DB-side wording |
+| `get_appointment`, `list_upcoming_patient_appointments`, `patch_appointment_reminder_state`, `append_appointment_reschedule_history` | `accepted` | reminder-state and append semantics are now locked in `db_service_contract_response.md` |
 | `get_medication`, `list_active_patient_medications` | `accepted with mapping` | valid if medication means canonical patient medication, not prescription rows |
+| `create_medication_adherence_log` | `accepted` | closes the medication adherence persistence gap against canonical `patient_medications` |
 | `create_workflow`, `get_workflow`, `list_workflows`, `patch_workflow_status` | `accepted with refinement` | valid, but versioning and compare-and-set semantics must be explicit |
-| `create_conversation`, `patch_conversation`, `append_conversation_context_switch` | `accepted with refinement` | valid, but patch rules and version checks must be explicit |
-| `upsert_call_by_provider`, `patch_call_status`, `upsert_message_thread_by_provider`, `patch_message_status` | `accepted with refinement` | valid, but idempotency and provider-key rules must be explicit |
+| `create_conversation`, `patch_conversation`, `append_conversation_context_switch` | `accepted` | patch and version semantics are now documented in `db_service_contract_response.md` |
+| `create_call`, `get_call`, `get_call_by_provider_sid`, `upsert_call_by_provider`, `patch_call_status`, `upsert_message_thread_by_provider`, `patch_message_status` | `accepted` | provider callback correlation and provider-key semantics are now explicitly accepted |
 | `create_operation`, `patch_operation`, `create_artifact`, `get_artifact`, `create_artifact_export` | `accepted with refinement` | valid, but artifact metadata vs payload boundary must stay clear |
 | `list_practitioner_availability`, `hold_practitioner_slot`, `confirm_practitioner_slot`, `release_practitioner_slot` | `accepted` | valid and required; scheduling remains authoritative |
 | `create_staff_notification`, `create_symptom_report`, `create_patient_feedback` | `accepted` | valid structured output writes |
 | `get_custom_form_definition` | `accepted` | valid DB-owned extension point |
+| `list_active_webhook_subscriptions` | `accepted` | Team B now gives active subscription lookup a durable home |
 
 ---
 
@@ -247,7 +227,11 @@ The schema work already completed supports the following CRM needs.
 Important note:
 
 "supported" here means the ownership and data model are defined.
-It does not automatically mean the service contract semantics are fully specified.
+For the CRM-facing DB-service method surface and event surface, the remaining contract semantics are now closed by:
+
+- `db_service_contract_response.md`
+- `db_event_contract.md`
+- `crm_controlled_enum_registry.md`
 
 ---
 
@@ -258,9 +242,9 @@ CRM should not assume the following are already approved just because they appea
 | Assumption | Current DB-side status |
 |---|---|
 | every request metadata field is also a persistent column on major records | not agreed |
-| every mutable record already exposes `version` in DB-side docs | not yet documented |
-| compare-and-set semantics are already approved for all mutable entities | not yet documented per entity |
-| event publication semantics are already finalized | not yet documented |
+| every mutable record already exposes `version` in DB-side docs | now documented: `version` added to all mutable CRM-facing records |
+| compare-and-set semantics are already approved for all mutable entities | approved for workflow, conversation, call, appointment, and patient_medication; must still be declared operation by operation in the DB service contract |
+| event publication semantics are already finalized | now documented in `db_event_contract.md` |
 | CRM enum values are automatically accepted as DB-approved controlled sets | not yet fully ratified on DB side |
 
 That does not mean these are rejected.
@@ -277,7 +261,7 @@ The DB-side interpretation should be:
 
 | Field | Meaning | Required? | DB-side position |
 |---|---|---|---|
-| `tenant_id` | the tenant whose data is being acted on; in the current DB schema this maps to `organization_id` | yes | required contract field; tenant scoping is mandatory |
+| `organization_id` | the organization whose data is being acted on; agreed canonical name as of 2026-04-15 | yes | required contract field; organization scoping is mandatory on all requests |
 | `facility_id` | facility context when the action is facility-scoped | optional | valid optional contract field |
 | `correlation_id` | the end-to-end request or workflow correlation key used to tie related actions together across services | yes | valid service metadata; not a default entity column |
 | `causation_id` | the immediate prior event, command, or action that caused this DB request to happen | optional | valid service metadata; not a default entity column |
@@ -345,7 +329,7 @@ The default position should be:
 
 | Field | Default treatment |
 |---|---|
-| `tenant_id` | logical contract field; in current schema this persists as `organization_id` on records where ownership/scope requires it |
+| `organization_id` | agreed canonical contract field; persists as `organization_id` on all scoped records |
 | `facility_id` | persistent where the entity itself is facility-scoped |
 | `correlation_id` | request metadata by default; persist selectively if needed for audit/operations |
 | `causation_id` | request metadata by default; persist selectively if needed for audit/event traceability |
@@ -512,11 +496,16 @@ Based on CRM docs, the likely V1 workflow set is:
 - `care_feedback`
 - `general_call`
 - `diagnosis`
+- `custom`
 
 Important note:
 
-CRM docs also mention values like `diagnosis_followup` and `custom` in some places.
-Those should not be assumed accepted by DB side until a controlled-value list is explicitly ratified.
+The controlled-value list is now ratified in `crm_controlled_enum_registry.md`.
+The DB-side interpretation is bounded:
+
+- `diagnosis` is the only currently ratified diagnosis-family workflow type
+- `custom` is accepted only for approved custom-form-driven workflows and campaigns
+- `custom` does not imply arbitrary undefined runtime workflow behavior
 
 ---
 
@@ -543,7 +532,7 @@ Those should not be assumed accepted by DB side until a controlled-value list is
 | contract DTO names should equal DB schema column names | too strong |
 | entity names like `Tenant` and `Medication` already map one-to-one to DB tables | too strong |
 | DB event publication details are already settled | too strong |
-| enum values listed in CRM docs are automatically approved by DB | too strong |
+| enum values listed in CRM docs are automatically approved by DB without explicit bounded ratification | too strong |
 
 ---
 
@@ -576,21 +565,17 @@ That expectation is visible in the handoff.
 
 ### DB-side position
 
-This requirement is reasonable, but the DB side has not yet documented:
+This requirement is accepted.
+The DB-side event contract is now defined in `db_event_contract.md`.
 
-- which exact events will be published
+That document closes the following points:
+
+- which exact CRM-required events Team B will publish
 - what the event envelope shape is
-- whether publication is transactional with the write
-- which records are event sources
+- what the trigger conditions are
+- the required delivery guarantee
 
-So the honest status is:
-
-| Topic | Status |
-|---|---|
-| need for DB-originated events | acknowledged |
-| exact event contract | not yet defined on DB side |
-
-CRM should not assume this is already finalized.
+CRM should build against that event contract rather than infer eventing behavior from schema docs alone.
 
 ---
 
@@ -624,12 +609,12 @@ This section states what CRM asked for and how DB side currently responds.
 
 | Topic | DB-side clarification |
 |---|---|
-| `tenant_id` | maps to current DB `organization_id` |
+| `organization_id` | agreed canonical name; resolved 2026-04-15 |
 | `Medication` | maps to canonical patient medication records for workflow targeting |
 | metadata fields | are contract-envelope fields first, not default table columns |
 | `version` | will be a contract concern for mutable records even where not shown yet in schema docs |
-| compare-and-set | will be supported on correctness-critical mutation paths, not assumed universally without definition |
-| event publication | acknowledged, but event catalog and envelope still need DB-side definition |
+| compare-and-set | supported on the correctness-critical mutation paths declared in `db_service_contract_response.md` |
+| event publication | now explicitly defined in `db_event_contract.md` |
 | diagnosis outputs | should not remain artifact-only if app/frontend needs direct querying |
 
 ---
@@ -641,14 +626,14 @@ CRM should update its understanding in the following places.
 | Topic | Clarification |
 |---|---|
 | request metadata | valid contract metadata, not automatically schema columns |
-| version metadata | should be exposed by contract, but is not yet fully written into DB docs |
+| version metadata | now written into DB schema docs: `version` field on all mutable CRM-facing records |
 | concurrency | accepted in principle, but must be declared per operation |
 | enum values | must be ratified as controlled sets, not inferred from examples |
 | diagnosis output | should not be treated as artifact-only if other app surfaces need direct query access |
 | consent linkage | consent is separate from `patient_contacts`, but may link to them |
 | scheduling truth | CRM must treat scheduling as authoritative shared state |
 | medication truth | CRM must use canonical `patient_medications`, not duplicate masters |
-| naming | CRM `tenant_id` currently maps to DB `organization_id` |
+| naming | resolved: both sides use `organization_id` as of 2026-04-15 |
 
 ---
 
@@ -659,10 +644,10 @@ The following should be treated as explicitly not yet agreed unless later docume
 | Topic | Non-assumption |
 |---|---|
 | metadata persistence | `correlation_id`, `causation_id`, and `trace_id` are not assumed to be columns on every entity |
-| universal record version column | not assumed across all schema docs today |
-| full event catalog | not yet agreed |
-| exact DB-service error catalog | not yet ratified on DB side beyond general direction |
-| exact enum completeness | not yet ratified on DB side |
+| universal record version column | now present on all mutable CRM-facing records as of 2026-04-15 |
+| full event catalog | now defined in `db_event_contract.md` for the CRM-required event set |
+| exact DB-service error catalog | now ratified in `db_service_contract_response.md` |
+| exact enum completeness | now ratified for the CRM-facing V1 set in `crm_controlled_enum_registry.md` |
 | final diagnosis-outcome model | not yet fully settled |
 | one-to-one name parity | CRM names are not assumed to equal DB table names |
 
@@ -674,9 +659,9 @@ To fully close the gap with CRM, DB side should next produce:
 
 | Document | Why |
 |---|---|
-| DB service contract response | formalize envelope fields, versioning, idempotency, compare-and-set, and error semantics |
-| DB-originated event contract | define which events are published and how |
-| controlled enum registry for CRM-facing values | prevent drift on `workflow_type`, `subject_type`, and similar fields |
+| DB service contract response | completed in `db_service_contract_response.md` |
+| DB-originated event contract | completed in `db_event_contract.md` |
+| controlled enum registry for CRM-facing values | completed in `crm_controlled_enum_registry.md` |
 | telemedicine schema | finish the canonical telemedicine side that CRM may reference |
 
 ---
@@ -692,5 +677,5 @@ The key DB-side message is:
 
 - yes, many of CRM's requirements are acknowledged
 - no, not all of them belong in table definitions
-- request metadata, idempotency, versioning, and compare-and-set must be defined as service-contract behavior
-- CRM should not assume approval where DB side has not yet written the contract explicitly
+- request metadata, idempotency, versioning, compare-and-set, and eventing are now defined through the DB-side contract documents listed above
+- CRM should build against those DB-side contract documents rather than infer semantics from schema docs alone
