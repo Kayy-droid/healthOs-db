@@ -172,6 +172,7 @@ Durable call execution records for outbound or inbound CRM voice interactions.
 | `status` | Status such as `queued`, `ringing`, `in_progress`, `completed`, `failed`, `cancelled`, or `no_answer` |
 | `started_at` | When the call connected or began execution |
 | `ended_at` | When the call ended |
+| `duration_seconds` | Optional call duration in seconds once the provider or runtime can compute it |
 | `recording_ref` | Optional recording reference |
 | `transcript_ref` | Optional transcript reference |
 | `outcome_summary` | Optional concise operational outcome summary |

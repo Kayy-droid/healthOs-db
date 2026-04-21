@@ -199,7 +199,7 @@ The CRM documents ask for the following classes of support.
 | `create_medication_adherence_log` | `accepted` | closes the medication adherence persistence gap against canonical `patient_medications` |
 | `create_workflow`, `get_workflow`, `list_workflows`, `patch_workflow_status` | `accepted with refinement` | valid, but versioning and compare-and-set semantics must be explicit |
 | `create_conversation`, `patch_conversation`, `append_conversation_context_switch` | `accepted` | patch and version semantics are now documented in `db_service_contract_response.md` |
-| `create_call`, `get_call`, `get_call_by_provider_sid`, `upsert_call_by_provider`, `patch_call_status`, `upsert_message_thread_by_provider`, `patch_message_status` | `accepted` | provider callback correlation and provider-key semantics are now explicitly accepted |
+| `create_call`, `get_call`, `get_call_by_provider_sid`, `upsert_call_by_provider`, `patch_call_status`, `upsert_message_thread_by_provider`, `patch_message_status` | `accepted` | provider callback correlation and provider-key semantics are now explicitly accepted; durable call records may also carry `workflow_id` as the originating workflow link |
 | `create_operation`, `patch_operation`, `create_artifact`, `get_artifact`, `create_artifact_export` | `accepted with refinement` | valid, but artifact metadata vs payload boundary must stay clear |
 | `list_practitioner_availability`, `hold_practitioner_slot`, `confirm_practitioner_slot`, `release_practitioner_slot` | `accepted` | valid and required; scheduling remains authoritative |
 | `create_staff_notification`, `create_symptom_report`, `create_patient_feedback` | `accepted` | valid structured output writes |

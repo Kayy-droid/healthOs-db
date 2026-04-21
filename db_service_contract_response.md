@@ -180,6 +180,9 @@ The following methods are accepted as the Team B V1 CRM-facing surface.
 - `upsert_message_thread_by_provider`
 - `patch_message_status`
 
+Team B's durable call record contract includes `workflow_id` as an optional linkage field.
+This allows callback handling and other CRM-owned runtime paths to correlate a call back to its originating workflow without scanning unrelated records.
+
 ### Operation And Artifact
 
 - `create_operation`
